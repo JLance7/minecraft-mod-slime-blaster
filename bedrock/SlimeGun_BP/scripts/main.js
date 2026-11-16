@@ -20,7 +20,6 @@ const shots = new Map();
 system.beforeEvents.startup.subscribe(({ itemComponentRegistry, blockComponentRegistry }) => {
     itemComponentRegistry.registerCustomComponent("slimegun:fire", {
         onUse: ({ source }) => fire(source),
-        onUseOn: ({ source }) => fire(source),
     });
     blockComponentRegistry.registerCustomComponent("slimegun:decay", {
         onTick({ block }) {
@@ -33,6 +32,23 @@ system.beforeEvents.startup.subscribe(({ itemComponentRegistry, blockComponentRe
             }
         },
     });
+});
+
+// Bedrock can route Use to the block or mob under the crosshair instead
+// of the held item's onUse handler. Reserve those interactions for firing.
+world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+    if (event.itemStack?.typeId !== gun) return;
+    event.cancel = true;
+    if (event.isFirstEvent) {
+        const { player } = event;
+        system.run(() => fire(player));
+    }
+});
+world.beforeEvents.playerInteractWithEntity.subscribe((event) => {
+    if (event.itemStack?.typeId !== gun) return;
+    event.cancel = true;
+    const { player } = event;
+    system.run(() => fire(player));
 });
 
 world.afterEvents.playerLeave.subscribe(({ playerId }) => cooldowns.delete(playerId));
@@ -57,6 +73,7 @@ function release(entity, addedName) {
 }
 
 function fire(player) {
+    if (!player.isValid) return;
     const now = system.currentTick;
     if ((cooldowns.get(player.id) ?? 0) > now) return;
 
@@ -65,8 +82,9 @@ function fire(player) {
     const weapon = inventory?.getItem(slot);
     if (!inventory || weapon?.typeId !== gun) return;
 
-    const creative = player.getGameMode() === GameMode.Creative;
-    if (!creative && player.getGameMode() !== GameMode.Survival && player.getGameMode() !== GameMode.Adventure) return;
+    const mode = player.getGameMode();
+    const creative = mode === GameMode.Creative;
+    if (!creative && mode !== GameMode.Survival && mode !== GameMode.Adventure) return;
     let ammoSlot = -1;
     let slimeball;
     if (!creative) {
@@ -83,7 +101,6 @@ function fire(player) {
             return;
         }
     }
-
     const position = player.getHeadLocation();
     const direction = player.getViewDirection();
     const dimension = player.dimension;
@@ -195,10 +212,14 @@ function loadedBlock(dimension, location) {
     try {
         return dimension.getBlock(location);
     } catch (error) {
-        if (error instanceof LocationInUnloadedChunkError ||
-            error instanceof LocationOutOfWorldBoundariesError) return undefined;
+        if (isUnavailableLocation(error)) return undefined;
         throw error;
     }
+}
+
+function isUnavailableLocation(error) {
+    return error instanceof LocationInUnloadedChunkError ||
+        error instanceof LocationOutOfWorldBoundariesError;
 }
 
 function cocoonStillPresent(dimension, bounds) {
@@ -221,7 +242,13 @@ function cocoonStillPresent(dimension, bounds) {
 
 system.runInterval(() => {
     for (const [id, shot] of shots) {
-        if (advanceShot(shot)) continue;
+        try {
+            if (advanceShot(shot)) continue;
+        } catch (error) {
+            // The rounded-up ray can enter an unavailable block beyond this
+            // tick's endpoint even when the endpoint itself is loaded.
+            if (!isUnavailableLocation(error)) throw error;
+        }
         shots.delete(id);
         if (shot.visual.isValid) shot.visual.remove();
     }

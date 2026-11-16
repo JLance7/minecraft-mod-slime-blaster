@@ -1,6 +1,12 @@
-param([string]$Output = (Join-Path $PSScriptRoot 'dist/Slime-Gun-Bedrock-1.1.1.mcaddon'))
+param([string]$Output)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+$manifest = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'SlimeGun_BP/manifest.json') | ConvertFrom-Json
+$version = $manifest.header.version -join '.'
+$bundleName = "Slime-Gun-Bedrock-$version.mcaddon"
+if (!$Output) {
+    $Output = Join-Path $PSScriptRoot "dist/$bundleName"
+}
 $outputPath = [IO.Path]::GetFullPath($Output)
 $tempPath = Join-Path ([IO.Path]::GetTempPath()) ('slime-addon-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $tempPath, (Split-Path $outputPath -Parent) -Force | Out-Null
@@ -9,7 +15,7 @@ try {
         [IO.Compression.ZipFile]::CreateFromDirectory(
             (Join-Path $PSScriptRoot $pack), (Join-Path $tempPath "$pack.mcpack"))
     }
-    $bundle = Join-Path $tempPath 'Slime-Gun-Bedrock-1.1.1.mcaddon'
+    $bundle = Join-Path $tempPath $bundleName
     $archive = [IO.Compression.ZipFile]::Open($bundle, [IO.Compression.ZipArchiveMode]::Create)
     try {
         foreach ($pack in @('SlimeGun_BP.mcpack', 'SlimeGun_RP.mcpack')) {
